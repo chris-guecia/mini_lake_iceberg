@@ -53,6 +53,9 @@ services:
       - iceberg
     volumes:
       - ./data:/app/data
+    environment:
+      - DREMIO_USER=admin
+      - DREMIO_PASSWORD=dremio_password123
     depends_on:
       - minio
       - dremio
