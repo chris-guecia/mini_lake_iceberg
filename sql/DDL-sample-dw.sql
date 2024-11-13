@@ -62,15 +62,17 @@ INSERT INTO nessie.warehouse.dim_verb VALUES
 
 
 -- Create fact_events table
-CREATE TABLE nessie.warehouse.fact_events (
-    event_id VARCHAR,
-    user_sk BIGINT,
-    product_sk BIGINT,
-    object_sk BIGINT,
-    verb_sk BIGINT,
-    event_timestamp TIMESTAMP,
-    event_date DATE
-);
+CREATE TABLE IF NOT EXISTS nessie.warehouse.fact_events (
+            id VARCHAR,
+            user_id VARCHAR,
+            verb VARCHAR,
+            object VARCHAR,
+            product VARCHAR,
+            time_stamp TIMESTAMP,
+            batch_date VARCHAR,
+            elt_created_at TIMESTAMP
+        )
+        PARTITION BY (day(time_stamp));
 
 -- Create dim_user_type2 table with SCD Type 2 attributes
 DROP TABLE IF EXISTS nessie.warehouse.dim_user_type2;
