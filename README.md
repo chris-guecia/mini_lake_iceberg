@@ -130,14 +130,16 @@ docker exec simulate-ingestion-elt python app/main.py
 Do to the sample JSON being only 1 days worth of events 2023-01-01, queries looking back a week from CURRENT_TIMESTAMP   
 won't return results I made some changes to the queries to show results based on the sample event timestamps
 
-![dremio_sql_result_4.JPG](..%2F..%2FPictures%2Fdremio_sql_result_4.JPG)
+![dremio_sql_result_4](https://github.com/user-attachments/assets/b22de3ff-f8dc-4103-83b3-130f965852d2)
 
-![dremio_sql_result_3.JPG](..%2F..%2FPictures%2Fdremio_sql_result_3.JPG)
-Additional tables and schema details can be found in `sql/DDL-sample-dw.sql`.
-
+![dremio_sql_result_3](https://github.com/user-attachments/assets/e3c0ab17-8a56-4099-a891-1b184a5030e1)
 
 ERD
-![amplify_erd.JPG](..%2F..%2FPictures%2Famplify_erd.JPG)
+![amplify_erd](https://github.com/user-attachments/assets/58c19d5c-daff-4c8f-9944-8885a4b2068d)
+
+
+Additional tables and schema details can be found in `sql/DDL-sample-dw.sql`.
+
 ## Key Features
 
 - **Data Versioning**: Uses Nessie branches for safe data loading and validation
