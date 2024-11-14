@@ -15,11 +15,6 @@ The pipeline consists of the following components:
 
 - Docker and Docker Compose
 - Python 3.8+
-- Access to the following ports:
-  - 9000: MinIO
-  - 32010: Dremio Flight endpoint
-  - 9047: Dremio UI
-
 
 ## Setup Instructions
 
