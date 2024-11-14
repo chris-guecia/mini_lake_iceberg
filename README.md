@@ -125,9 +125,24 @@ To run the pipeline:
 ```bash
 docker exec simulate-ingestion-elt python app/main.py
 ```
+In Dremio You should see this in sources in http://localhost:9047/  
+![dremio_datasets](https://github.com/user-attachments/assets/6bae0e28-99ea-4949-9ed2-bc4a15e5c626)
+
+
+The warehouse should look like this 
+![dremio_6](https://github.com/user-attachments/assets/0e3998a2-4d30-49ce-969c-ff80e935bcb3)
+
+
+Here shows different Nessie Branches in Dremio UI  
+![dremio_branches](https://github.com/user-attachments/assets/2a1c856b-86f3-499a-8297-be9c187927f1)
+
+
+And MinIO should look like this (object counts in warehouse will differ) http://localhost:9001/browser  
+![minIO_1](https://github.com/user-attachments/assets/1bd9bf3d-f04b-461b-88c0-4a2e904de51a)
+
 
 ## Analytical SQL query results
-Do to the sample JSON being only 1 days worth of events 2023-01-01, queries looking back a week from CURRENT_TIMESTAMP   
+Due to the sample JSON being only 1 days worth of events 2023-01-01, queries looking back a week from CURRENT_TIMESTAMP   
 won't return results I made some changes to the queries to show results based on the sample event timestamps
 
 ![dremio_sql_result_4](https://github.com/user-attachments/assets/b22de3ff-f8dc-4103-83b3-130f965852d2)
