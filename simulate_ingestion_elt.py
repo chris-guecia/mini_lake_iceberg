@@ -29,36 +29,39 @@ def normalize_json_to_polars(json_file_path: str) -> pl.DataFrame:
     current_timestamp = datetime.utcnow()
 
     # First rename the columns to drop common_ prefix
-    renamed_df = df.rename({
-        "common_userId": "user_id",
-        "common_verb": "verb",
-        "common_object": "object",
-        "common_product": "product",
-        "common_timestamp": "time_stamp"
-    })
+    renamed_df = df.rename(
+        {
+            "common_userId": "user_id",
+            "common_verb": "verb",
+            "common_object": "object",
+            "common_product": "product",
+            "common_timestamp": "time_stamp",
+        }
+    )
 
-    df_final = renamed_df.with_columns([
-        # Parse timestamp string with specific format
-        pl.col("time_stamp")
-        .str.strptime(pl.Datetime, format="%Y-%m-%d %H:%M:%S.%f")
-        .dt.strftime("%Y-%m-%d")
-        .alias("batch_id"),
-        pl.col("time_stamp")
-        .str.strptime(pl.Datetime, format="%Y-%m-%d %H:%M:%S.%f")
-        .dt.strftime("%Y-%m-%d")
-        .alias("batch_date"),
-        pl.lit(current_timestamp).cast(pl.Datetime).alias("elt_created_at")
-    ])
+    df_final = renamed_df.with_columns(
+        [
+            # Parse timestamp string with specific format
+            pl.col("time_stamp")
+            .str.strptime(pl.Datetime, format="%Y-%m-%d %H:%M:%S.%f")
+            .dt.strftime("%Y-%m-%d")
+            .alias("batch_id"),
+            pl.col("time_stamp")
+            .str.strptime(pl.Datetime, format="%Y-%m-%d %H:%M:%S.%f")
+            .dt.strftime("%Y-%m-%d")
+            .alias("batch_date"),
+            pl.lit(current_timestamp).cast(pl.Datetime).alias("elt_created_at"),
+        ]
+    )
 
     return df_final
 
 
 def write_partitioned_to_minio(
-        df: pl.DataFrame,
-        bucket: str,
-        minio_path: str,  # Changed to Path object
-        partition_col: str = "batch_id",
-
+    df: pl.DataFrame,
+    bucket: str,
+    minio_path: str,  # Changed to Path object
+    partition_col: str = "batch_id",
 ) -> None:
     """
     Write partitioned parquet files to MinIO using Polars and PyArrow's S3FileSystem.
@@ -80,9 +83,11 @@ def write_partitioned_to_minio(
         df.write_parquet(
             full_path,
             use_pyarrow=True,
-            pyarrow_options={"partition_cols": [partition_col],
-                             "filesystem": s3_fs,
-                             "existing_data_behavior": "delete_matching"},
+            pyarrow_options={
+                "partition_cols": [partition_col],
+                "filesystem": s3_fs,
+                "existing_data_behavior": "delete_matching",
+            },
         )
 
     except Exception as e:
@@ -105,9 +110,14 @@ def create_dremio_client():
 
     client = flight.connect(dremio_url)
 
-    bearer_token = flight.FlightCallOptions(headers=[
-        (b'authorization', f'Basic {base64.b64encode(f"{DREMIO_USER}:{DREMIO_PASS}".encode()).decode()}'.encode())
-    ])
+    bearer_token = flight.FlightCallOptions(
+        headers=[
+            (
+                b"authorization",
+                f'Basic {base64.b64encode(f"{DREMIO_USER}:{DREMIO_PASS}".encode()).decode()}'.encode(),
+            )
+        ]
+    )
 
     return client, bearer_token
 
@@ -127,14 +137,13 @@ def execute_dremio_sql(query: str, client_and_token) -> Optional[pl.DataFrame]:
     print(f"\nExecuting Dremio SQL:\n{query}")
 
     flight_info = client.get_flight_info(
-        flight.FlightDescriptor.for_command(query),
-        options=bearer_token
+        flight.FlightDescriptor.for_command(query), options=bearer_token
     )
 
     reader = client.do_get(flight_info.endpoints[0].ticket, options=bearer_token)
 
     # If it's a SELECT query, convert results to Polars DataFrame
-    if query.strip().upper().startswith('SELECT'):
+    if query.strip().upper().startswith("SELECT"):
         # Read to Arrow Table
         arrow_table = reader.read_all()
 
@@ -160,8 +169,7 @@ def setup_and_load_iceberg(batch_id: str, branch_name: str, client_and_token):
         # Create branch from main
         print(f"Creating branch: {branch_name}")
         execute_dremio_sql(
-            f"CREATE BRANCH {branch_name} FROM REF main IN nessie",
-            client_and_token
+            f"CREATE BRANCH {branch_name} FROM REF main IN nessie", client_and_token
         )
         print(f"Made: {branch_name=}")
         # Create source for raw parquet files using correct Dremio syntax
@@ -218,7 +226,7 @@ def row_count_check(branch_name: str, client_and_token, expected_result: int):
     """
 
     df_result = execute_dremio_sql(sql_check_query, client_and_token)
-    count = df_result['row_count'].item()
+    count = df_result["row_count"].item()
     if count == expected_result:
         return True
 
@@ -227,7 +235,9 @@ def publish_branch(branch_name: str, client_and_token, expected_result: int):
     """Function that uses the row count check result"""
     try:
         # Perform row count check
-        if row_count_check(branch_name, client_and_token, expected_result=expected_result):
+        if row_count_check(
+            branch_name, client_and_token, expected_result=expected_result
+        ):
             print("Row count validation passed, proceeding with merge...")
 
             merge_sql = f"""
@@ -249,23 +259,17 @@ def publish_branch(branch_name: str, client_and_token, expected_result: int):
 def main():
     """
     Simulate an elt pipline writing data to s3.
-    event Json is flattened and writtend as a parquet file in a bucket called incoming.
-
-    Using Dremio as the sql engine take the raw events parquet files and move them into a Nessie Catalog branch
-
-
+    Copy data into iceberg lakehouse using Dremio and Nessie catalog.
 
     """
     sample_events = "/app/data/events-sample-data.json"
     df_raw_flat = normalize_json_to_polars(json_file_path=sample_events)
-    print('df being written')
+    print("df being written")
     df_raw_flat.glimpse()
 
     print(f"Writing polars dataframe of {sample_events=} to parquet files in MinIO")
     write_partitioned_to_minio(
-        df=df_raw_flat,
-        bucket="incoming",
-        minio_path="raw/events"
+        df=df_raw_flat, bucket="incoming", minio_path="raw/events"
     )
     print(f"finished making raw parquet")
 
@@ -276,10 +280,16 @@ def main():
         branch_name = make_branch_name()
         print("Loading to Iceberg with Nessie branching...")
         # Write
-        setup_and_load_iceberg(batch_id='2023-01-01', client_and_token=dremio_client, branch_name=branch_name)
+        setup_and_load_iceberg(
+            batch_id="2023-01-01",
+            client_and_token=dremio_client,
+            branch_name=branch_name,
+        )
 
         # Audit -> Publish
-        publish_branch(branch_name=branch_name, client_and_token=dremio_client, expected_result=15)
+        publish_branch(
+            branch_name=branch_name, client_and_token=dremio_client, expected_result=15
+        )
     except Exception as e:
         print(f"Something went wrong {e=}")
     finally:

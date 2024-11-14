@@ -20,8 +20,7 @@ The pipeline consists of the following components:
 
 1. **Clone the Repository**
    ```bash
-   git clone <repository-url>
-   cd <repository-name>
+   git clone https://github.com/chris-guecia/mini_lake_iceberg.git
    ```
 
 2. **Follow this guide provided by Dremio**  
