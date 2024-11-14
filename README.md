@@ -142,7 +142,7 @@ And MinIO should look like this (object counts in warehouse will differ) http://
 
 
 ## Analytical SQL query results
-Do to the sample JSON being only 1 days worth of events 2023-01-01, queries looking back a week from CURRENT_TIMESTAMP   
+Due to the sample JSON being only 1 days worth of events 2023-01-01, queries looking back a week from CURRENT_TIMESTAMP   
 won't return results I made some changes to the queries to show results based on the sample event timestamps
 
 ![dremio_sql_result_4](https://github.com/user-attachments/assets/b22de3ff-f8dc-4103-83b3-130f965852d2)
