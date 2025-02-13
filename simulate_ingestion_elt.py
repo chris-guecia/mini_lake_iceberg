@@ -1,11 +1,10 @@
 import polars as pl
 import pandas as pd
-import pyarrow as pa
 import pyarrow.fs as pa_fs
 from pyarrow import flight
 from typing import Optional
+from dataclasses import dataclass
 import json
-import time
 from datetime import datetime
 import os
 import base64
@@ -14,8 +13,8 @@ import logging
 # Configure logging at the start of the file
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 
 logger = logging.getLogger(__name__)
@@ -89,6 +88,7 @@ def write_partitioned_to_minio(
 
         # Construct the full path
         full_path = f"{bucket}/{minio_path}"
+        logger.info(f"minio {full_path=}")
 
         df.write_parquet(
             full_path,
@@ -167,7 +167,7 @@ def make_branch_name():
 
 def setup_and_load_iceberg(batch_id: str, branch_name: str, client_and_token):
     """
-    Create Iceberg table and load specific batch_id with partition overwrite
+    Create Iceberg table and load specific batch_id with merge statement
     """
     # flight says dremio can only process 1 query at a time
     try:
@@ -177,18 +177,22 @@ def setup_and_load_iceberg(batch_id: str, branch_name: str, client_and_token):
         )
         logger.info(f"Made: branch_name={branch_name}")
 
+        # Replace hyphens with underscores in the table name
+        batch_id_clean = batch_id.replace("-", "_")
+        temp_table = f"temp_fact_events_{batch_id_clean}"
+
         drop_in_branch = f"""
             -- Ingest Data from Parquet Files
             -- Drop then re-create version of fact_events within the branch
             -- This will help prevent duplicates if elt script is run multiple times.
-            
-            DROP TABLE IF EXISTS nessie.warehouse.fact_events AT BRANCH {branch_name};"""
+
+            DROP TABLE IF EXISTS nessie.warehouse.{temp_table} AT BRANCH {branch_name};"""
 
         execute_dremio_sql(drop_in_branch, client_and_token)
         logger.info(f"Dropped fact_events in: branch_name={branch_name}")
 
         create_in_branch = f"""
-        CREATE TABLE IF NOT EXISTS nessie.warehouse.fact_events (
+        CREATE TABLE IF NOT EXISTS nessie.warehouse.{temp_table} (
                     id VARCHAR,
                     user_id VARCHAR,
                     verb VARCHAR,
@@ -201,90 +205,158 @@ def setup_and_load_iceberg(batch_id: str, branch_name: str, client_and_token):
                 AT BRANCH {branch_name}
                 PARTITION BY (day(time_stamp));"""
         execute_dremio_sql(create_in_branch, client_and_token)
-        logger.info(f"Created fact_events in: branch_name={branch_name}")
+        logger.info(f"Created {temp_table} in: branch_name={branch_name}")
 
         copy_into_branch = f"""
-            COPY INTO nessie.warehouse.fact_events AT BRANCH {branch_name}
+            COPY INTO nessie.warehouse.{temp_table} AT BRANCH {branch_name}
              FROM '@incoming/raw/events/batch_id={batch_id}'
              FILE_FORMAT 'parquet';
         """
         execute_dremio_sql(copy_into_branch, client_and_token)
-        logger.info(f"Copied raw/events for batch_id={batch_id} into fact_events in: branch_name={branch_name}")
+        logger.info(
+            f"Copied raw/events for batch_id={batch_id} into {temp_table} in: branch_name={branch_name}"
+        )
+
+        # Merge temp directly into warehouse fact table
+        merge_fact_sql = f"""
+        MERGE INTO nessie.warehouse.fact_events AT BRANCH {branch_name} target
+        USING nessie.warehouse.{temp_table} AT BRANCH {branch_name} source
+        ON target.id = source.id 
+            AND target.batch_date = source.batch_date
+        WHEN MATCHED THEN
+            UPDATE SET *
+        WHEN NOT MATCHED THEN
+            INSERT VALUES (
+                source.id, 
+                source.user_id, 
+                source.verb, 
+                source.object, 
+                source.product,
+                source.time_stamp,
+                source.batch_date,
+                source.elt_created_at
+            );
+        """
+        execute_dremio_sql(merge_fact_sql, client_and_token)
+        logger.info(f"Merged batch_id={batch_id} into warehouse fact table")
+
+        # Clean up temp table
+        cleanup_sql = f"""
+        DROP TABLE IF EXISTS nessie.warehouse.{temp_table} AT BRANCH {branch_name};
+        """
+        execute_dremio_sql(cleanup_sql, client_and_token)
+        logger.info(f"Cleaned up temp table for batch_id={batch_id}")
 
     except Exception as e:
         logger.error(f"Error during load: {e}")
         logger.info(f"Attempting to drop branch {branch_name}")
         try:
             execute_dremio_sql(f"DROP BRANCH {branch_name} IN nessie", client_and_token)
+            logger.info(f"Dropped {branch_name=}")
+            # Also try to clean up temp table if it exists
+            execute_dremio_sql(
+                f"DROP TABLE IF EXISTS nessie.warehouse.{temp_table} AT BRANCH {branch_name};",
+                client_and_token,
+            )
         except Exception as e:
-            logger.error(f"Something went wrong when trying to drop branch_name={branch_name}: {e}")
+            logger.error(
+                f"Something went wrong when trying to drop branch_name={branch_name}: {e}"
+            )
         raise
 
 
-def row_count_check(branch_name: str, client_and_token, expected_result: int):
+@dataclass(frozen=True)
+class AuditChecks:
+    """Container for organizing info on what to run checks on"""
+
+    branch_name: str
+    batch_id: str
+    expected_results: int
+
+
+def row_count_check(audit_info: AuditChecks, client_and_token) -> bool:
     sql_check_query = f"""
-    SELECT COUNT(*) AS row_count FROM nessie.warehouse.fact_events AT BRANCH "{branch_name}";
+    SELECT COUNT(*) AS row_count
+    FROM nessie.warehouse.fact_events AT BRANCH "{audit_info.branch_name}"
+    WHERE batch_date = '{audit_info.batch_id}';
     """
 
     df_result = execute_dremio_sql(sql_check_query, client_and_token)
-    count = df_result["row_count"].item()
-    if count == expected_result:
+    row_count = df_result["row_count"].item()
+    logger.info(f"{row_count=} {audit_info.expected_results=}")
+    if row_count == audit_info.expected_results:
         return True
 
 
-def publish_branch(branch_name: str, client_and_token, expected_result: int):
+def publish_branch(audit_info: AuditChecks, client_and_token):
     """Function that uses the row count check result"""
     try:
-        if row_count_check(
-                branch_name, client_and_token, expected_result=expected_result
-        ):
+        if row_count_check(audit_info=audit_info, client_and_token=client_and_token):
             logger.info("Row count validation passed, proceeding with merge...")
 
             merge_sql = f"""
-            MERGE BRANCH {branch_name} INTO main IN nessie;;
+            MERGE BRANCH {audit_info.branch_name} INTO main IN nessie;;
             """
 
             execute_dremio_sql(merge_sql, client_and_token)
-            logger.info(f"Successful merge of {branch_name} into main")
+            logger.info(f"Successful merge of {audit_info.branch_name} into main")
 
         else:
             logger.warning("Row count validation failed, stopping process.")
-            logger.warning(f"review branch_name={branch_name} is required")
+            logger.warning(f"review branch_name={audit_info.branch_name} is required")
 
     except Exception as e:
         logger.error(f"Error in process_load: {str(e)}")
         raise
 
 
-def main():
+def main(files: list):
     """
-    Simulate an elt pipline writing data to s3.
+    Simulate an elt pipeline writing data to s3.
     Copy data into iceberg lakehouse using Dremio and Nessie catalog.
+
+    Args:
+        files: List of JSON file paths to process
     """
-    sample_events = "/app/data/events-sample-data.json"
-    df_raw_flat = normalize_json_to_polars(json_file_path=sample_events)
-
-    logger.info(f"Writing polars dataframe of sample_events={sample_events} to parquet files in MinIO")
-    write_partitioned_to_minio(
-        df=df_raw_flat, bucket="incoming", minio_path="raw/events"
-    )
-    logger.info("finished making raw parquet")
-
-    logger.info("Starting dremio raw -> external table -> branch -> merge to main")
     dremio_client = create_dremio_client()
 
     try:
-        branch_name = make_branch_name()
-        logger.info("Loading to Iceberg with Nessie branching...")
-        setup_and_load_iceberg(
-            batch_id="2023-01-01",
-            client_and_token=dremio_client,
-            branch_name=branch_name,
-        )
+        for file_path in files:
+            logger.info(f"Processing file: {file_path}")
 
-        publish_branch(
-            branch_name=branch_name, client_and_token=dremio_client, expected_result=15
-        )
+            # Normalize and write to MinIO
+            df_raw_flat = normalize_json_to_polars(json_file_path=file_path)
+
+            logger.info(f"Writing polars dataframe of file={file_path} to parquet files in MinIO")
+            write_partitioned_to_minio(
+                df=df_raw_flat, bucket="incoming", minio_path="raw/events"
+            )
+            logger.info("Finished making raw parquet")
+
+            # Extract batch_id from filename (assuming format YYYY-MM-DD_*)
+            batch_id = file_path.split('/')[-1].split('_')[0]  # Gets YYYY-MM-DD from filename
+
+            # Create branch and load to Iceberg
+            branch_name = make_branch_name()
+            logger.info("Loading to Iceberg with Nessie branching...")
+            setup_and_load_iceberg(
+                batch_id=batch_id,
+                client_and_token=dremio_client,
+                branch_name=branch_name,
+            )
+
+            # Perform audit checks
+            row_counts_audit = AuditChecks(
+                branch_name=branch_name,
+                batch_id=batch_id,
+                expected_results=15
+            )
+
+            # Publish the branch
+            publish_branch(audit_info=row_counts_audit, client_and_token=dremio_client)
+
+            logger.info(f"Successfully processed file: {file_path}")
+
     except Exception as e:
         logger.error(f"Something went wrong {e=}")
     finally:
@@ -293,4 +365,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # Example usage
+    files_to_process = [
+        "/app/data/2023-01-01_events-sample-data.json",
+        "/app/data/2023-01-02_events-sample-data.json",
+    ]
+    main(files=files_to_process)
