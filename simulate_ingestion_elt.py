@@ -67,10 +67,10 @@ def normalize_json_to_polars(json_file_path: str) -> pl.DataFrame:
 
 
 def write_partitioned_to_minio(
-        df: pl.DataFrame,
-        bucket: str,
-        minio_path: str,
-        partition_col: str = "batch_id",
+    df: pl.DataFrame,
+    bucket: str,
+    minio_path: str,
+    partition_col: str = "batch_id",
 ) -> None:
     """
     Write partitioned parquet files to MinIO using Polars and PyArrow's S3FileSystem.
@@ -182,10 +182,6 @@ def setup_and_load_iceberg(batch_id: str, branch_name: str, client_and_token):
         temp_table = f"temp_fact_events_{batch_id_clean}"
 
         drop_in_branch = f"""
-            -- Ingest Data from Parquet Files
-            -- Drop then re-create version of fact_events within the branch
-            -- This will help prevent duplicates if elt script is run multiple times.
-
             DROP TABLE IF EXISTS nessie.warehouse.{temp_table} AT BRANCH {branch_name};"""
 
         execute_dremio_sql(drop_in_branch, client_and_token)
@@ -327,14 +323,18 @@ def main(files: list):
             # Normalize and write to MinIO
             df_raw_flat = normalize_json_to_polars(json_file_path=file_path)
 
-            logger.info(f"Writing polars dataframe of file={file_path} to parquet files in MinIO")
+            logger.info(
+                f"Writing polars dataframe of file={file_path} to parquet files in MinIO"
+            )
             write_partitioned_to_minio(
                 df=df_raw_flat, bucket="incoming", minio_path="raw/events"
             )
             logger.info("Finished making raw parquet")
 
             # Extract batch_id from filename (assuming format YYYY-MM-DD_*)
-            batch_id = file_path.split('/')[-1].split('_')[0]  # Gets YYYY-MM-DD from filename
+            batch_id = file_path.split("/")[-1].split("_")[
+                0
+            ]  # Gets YYYY-MM-DD from filename
 
             # Create branch and load to Iceberg
             branch_name = make_branch_name()
@@ -347,9 +347,7 @@ def main(files: list):
 
             # Perform audit checks
             row_counts_audit = AuditChecks(
-                branch_name=branch_name,
-                batch_id=batch_id,
-                expected_results=15
+                branch_name=branch_name, batch_id=batch_id, expected_results=15
             )
 
             # Publish the branch
